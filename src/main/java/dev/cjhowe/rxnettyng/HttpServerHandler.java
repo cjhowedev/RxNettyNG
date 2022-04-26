@@ -19,12 +19,14 @@ final class HttpServerHandler extends ChannelInboundHandlerAdapter {
     if (msg instanceof HttpRequest) {
       request = new HttpServerRequest((HttpRequest) msg);
       callback.handleRequest(request, new HttpServerResponse(ctx));
-    } else if (msg instanceof HttpContent) {
-      request.onRead(((HttpContent) msg).content());
     } else if (msg instanceof LastHttpContent) {
       final LastHttpContent lastContent = (LastHttpContent) msg;
       request.onRead(lastContent.content());
       request.onComplete(lastContent.trailingHeaders());
+    } else if (msg instanceof HttpContent) {
+      request.onRead(((HttpContent) msg).content());
+    } else {
+      ctx.fireChannelRead(msg);
     }
   }
 }

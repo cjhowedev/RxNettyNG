@@ -1,18 +1,26 @@
 package dev.cjhowe.rxnettyng;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.DefaultHttpContent;
 import io.netty.handler.codec.http.DefaultHttpResponse;
 import io.netty.handler.codec.http.DefaultLastHttpContent;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
+import io.netty.util.concurrent.Future;
+import io.netty.util.concurrent.GenericFutureListener;
+import io.netty.util.concurrent.Promise;
+import io.netty.util.concurrent.PromiseCombiner;
 import io.reactivex.rxjava3.core.Flowable;
+import java.util.ArrayList;
+import java.util.List;
 
 /** Represents an in progress HTTP response to a request from an HttpServer. */
 public final class HttpServerResponse {
   private final ChannelHandlerContext context;
   private boolean headWritten = false;
+  private final List<ChannelFuture> writeFutures = new ArrayList<>();
 
   HttpServerResponse(ChannelHandlerContext context) {
     this.context = context;
@@ -36,7 +44,7 @@ public final class HttpServerResponse {
    * @return this for chaining
    */
   public HttpServerResponse writeHead(HttpResponseStatus status, HttpVersion version) {
-    context.write(new DefaultHttpResponse(version, status));
+    writeFutures.add(context.write(new DefaultHttpResponse(version, status)));
     headWritten = true;
     return this;
   }
@@ -58,7 +66,7 @@ public final class HttpServerResponse {
 
     body.subscribe(
         (buffer) -> {
-          context.write(new DefaultHttpContent(buffer));
+          writeFutures.add(context.write(new DefaultHttpContent(buffer)));
         },
         (cause) -> {
           context.fireExceptionCaught(cause);
@@ -72,7 +80,21 @@ public final class HttpServerResponse {
   public void end() {
     ensureHead();
 
-    context.writeAndFlush(new DefaultLastHttpContent());
-    context.close();
+    writeFutures.add(context.writeAndFlush(new DefaultLastHttpContent()));
+
+    Promise<Void> finishedWriting = context.channel().newPromise();
+    PromiseCombiner writeFutureCombiner = new PromiseCombiner(context.channel().eventLoop());
+    for (ChannelFuture writeFuture : writeFutures) {
+      writeFutureCombiner.add(writeFuture);
+    }
+    writeFutureCombiner.finish(finishedWriting);
+
+    finishedWriting.addListener(
+        new GenericFutureListener<Future<Void>>() {
+          @Override
+          public void operationComplete(Future<Void> f) {
+            context.close();
+          }
+        });
   }
 }
